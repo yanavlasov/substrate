@@ -45,7 +45,9 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
+	dynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	httpdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
@@ -111,6 +113,14 @@ const (
 	// httpExtProcFilterName is envoy.filters.http.ext_proc's own well-known
 	// name, used as the HttpFilter.Name in buildHcm.
 	httpExtProcFilterName = "envoy.filters.http.ext_proc"
+
+	// httpDynamicModulesFilterName is envoy.filters.http.dynamic_modules's
+	// well-known name, used as the HttpFilter.Name in buildHcm.
+	httpDynamicModulesFilterName = "envoy.filters.http.dynamic_modules"
+
+	// ingressCacheDynamicModuleName is the shared library and filter name for
+	// the ingress-cache dynamic module.
+	ingressCacheDynamicModuleName = "envoy_substrate_ingress_cache"
 
 	// endpointCachedHeader is set by the ingress-cache dynamic module on a cache
 	// hit so route selection picks the route that disables ext_proc.
@@ -1120,6 +1130,13 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		},
 	})
 
+	ingressCacheConfig := newAny(&httpdynamicmodulesv3.DynamicModuleFilter{
+		DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+			Name: ingressCacheDynamicModuleName,
+		},
+		FilterName: ingressCacheDynamicModuleName,
+	})
+
 	routerAny := newAny(&routerv3.Router{})
 
 	accessLogConfig := newAny(&streamaccesslogv3.StdoutAccessLog{})
@@ -1129,6 +1146,12 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
 	}
 	httpFilters = append(httpFilters,
+		&hcmv3.HttpFilter{
+			Name: httpDynamicModulesFilterName,
+			ConfigType: &hcmv3.HttpFilter_TypedConfig{
+				TypedConfig: ingressCacheConfig,
+			},
+		},
 		&hcmv3.HttpFilter{
 			Name: httpExtProcFilterName,
 			ConfigType: &hcmv3.HttpFilter_TypedConfig{

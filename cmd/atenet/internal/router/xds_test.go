@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	httpdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -1252,6 +1253,71 @@ func TestXdsServer_BuildRoutes_EndpointCachedRoute(t *testing.T) {
 	}
 	if len(fallbackRoute.GetTypedPerFilterConfig()) != 0 {
 		t.Errorf("routes[1] TypedPerFilterConfig = %v, want empty", fallbackRoute.GetTypedPerFilterConfig())
+	}
+}
+
+func TestXdsServer_BuildHcm_IngressCacheFilter(t *testing.T) {
+	x := NewXdsServer(18000)
+
+	for _, tc := range []struct {
+		name                string
+		captureActorRouting bool
+		wantFilters         []string
+		dynamicModuleIdx    int
+	}{
+		{
+			name:                "with actor routing capture",
+			captureActorRouting: true,
+			wantFilters: []string{
+				"envoy.filters.http.set_filter_state",
+				httpDynamicModulesFilterName,
+				httpExtProcFilterName,
+				"envoy.filters.http.router",
+			},
+			dynamicModuleIdx: 1,
+		},
+		{
+			name:                "without actor routing capture",
+			captureActorRouting: false,
+			wantFilters: []string{
+				httpDynamicModulesFilterName,
+				httpExtProcFilterName,
+				"envoy.filters.http.router",
+			},
+			dynamicModuleIdx: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hcmAny := x.buildHcm("test", tc.captureActorRouting)
+			hcm := &hcmv3.HttpConnectionManager{}
+			if err := hcmAny.UnmarshalTo(hcm); err != nil {
+				t.Fatalf("unmarshal HCM: %v", err)
+			}
+
+			filters := hcm.GetHttpFilters()
+			if len(filters) != len(tc.wantFilters) {
+				t.Fatalf("HttpFilters count = %d, want %d", len(filters), len(tc.wantFilters))
+			}
+			for i, wantName := range tc.wantFilters {
+				if got := filters[i].GetName(); got != wantName {
+					t.Errorf("HttpFilters[%d].Name = %q, want %q", i, got, wantName)
+				}
+			}
+
+			dmFilter := &httpdynamicmodulesv3.DynamicModuleFilter{}
+			if err := filters[tc.dynamicModuleIdx].GetTypedConfig().UnmarshalTo(dmFilter); err != nil {
+				t.Fatalf("unmarshal DynamicModuleFilter: %v", err)
+			}
+			if got := dmFilter.GetDynamicModuleConfig().GetName(); got != ingressCacheDynamicModuleName {
+				t.Errorf("DynamicModuleConfig.Name = %q, want %q", got, ingressCacheDynamicModuleName)
+			}
+			if got := dmFilter.GetFilterName(); got != ingressCacheDynamicModuleName {
+				t.Errorf("FilterName = %q, want %q", got, ingressCacheDynamicModuleName)
+			}
+			if got := dmFilter.GetFilterConfig(); got != nil {
+				t.Errorf("FilterConfig = %v, want nil", got)
+			}
+		})
 	}
 }
 
